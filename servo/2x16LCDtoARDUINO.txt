@@ -1,0 +1,14 @@
+| LCD Pin | Name     | Arduino Pin                             |
+| ------- | -------- | --------------------------------------- |
+| 1       | VSS      | GND                                     |
+| 2       | VDD      | 5V                                      |
+| 3       | V0       | Middle of potentiometer (contrast)      |
+| 4       | RS       | D7                                      |
+| 5       | RW       | GND                                     |
+| 6       | E        | D8                                      |
+| 11      | D4       | D9                                      |
+| 12      | D5       | D10                                     |
+| 13      | D6       | D11                                     |
+| 14      | D7       | D12                                     |
+| 15      | A (LED+) | 5V (through 220Ω resistor if available) |
+| 16      | K (LED-) | GND                                     |

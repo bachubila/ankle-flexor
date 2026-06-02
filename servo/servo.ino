@@ -1,50 +1,179 @@
-/********************************************************************************
+/************************************************************
+ * Ankle Flexor Servo Controller
+ *
+ * Features:
+ * 1. Potentiometer Control Mode
+ *    - Potentiometer controls servo position.
+ *    - Motion is limited to a safe angle range.
+ *    - Servo movement is smoothed to reduce sudden jumps.
+ *
+ * 2. Therapy Cycle Mode
+ *    - Servo automatically moves between a minimum
+ *      and maximum angle.
+ *    - Movement speed is configurable.
+ *
+ * To switch modes:
+ * - In loop(), call either:
+ *     potentiometerControl();
+ *   or
+ *     therapyCycle(...);
+ *
+ ************************************************************/
 
- * Servo motor control with Arduino
- * Potentiometer connected to Arduino is used to set Servo's position.
+#include <Servo.h>   // Arduino Servo library
 
-/********************************************************************************/
-
-#include <Servo.h>
-
+// Create servo object
 Servo servo;
 
-#define PotPin A0
-#define ServoPin 9
+// Pin definitions
+#define PotPin    A0
+#define ServoPin  9
 
-// Safe movement limits
+// Safe operating range for potentiometer mode
 const int MIN_ANGLE = 30;
 const int MAX_ANGLE = 120;
 
-// Current servo position
-int currentAngle = 75;  // Start near the middle
+// Track current servo position for smooth movement
+int currentAngle = 75;
 
-void setup() {
-  servo.attach(ServoPin);
-  servo.write(currentAngle);
+/************************************************************
+ * SETUP
+ ************************************************************/
+void setup()
+{
+    // Attach servo to control pin
+    servo.attach(ServoPin);
+
+    // Move servo to starting position
+    servo.write(currentAngle);
+
+    // Initialize serial communication
+    Serial.begin(9600);
+
+    Serial.println("Ankle Flexor Controller Started");
 }
 
-void loop() {
-  // Read potentiometer
-  uint16_t an = analogRead(PotPin);
+/************************************************************
+ * POTENTIOMETER CONTROL MODE
+ *
+ * Reads the potentiometer and maps its value to the
+ * configured angle range.
+ *
+ * Smoothly moves the servo toward the target angle.
+ * Includes a deadband to reduce jitter.
+ ************************************************************/
+void potentiometerControl()
+{
+    // Read potentiometer value (0–1023)
+    uint16_t potValue = analogRead(PotPin);
 
-  // Map potentiometer to the safe range
-  int targetAngle = map(an, 0, 1023, MIN_ANGLE, MAX_ANGLE);
+    // Convert potentiometer value into angle range
+    int targetAngle = map(
+        potValue,
+        0,
+        1023,
+        MIN_ANGLE,
+        MAX_ANGLE
+    );
 
-  // Smooth movement: move 1 degree at a time
-  if (abs(targetAngle - currentAngle) > 2)  // the servo ignores those tiny changes and only moves when the difference reaches at least 2°. This reduces jitter and unnecessary servo activity.
-  {
+lcdPrint(currentAngle, targetAngle);
+    // Deadband: ignore tiny changes
+    if (abs(targetAngle - currentAngle) > 1)
+    {
+        // Move gradually toward target
+        if (currentAngle < targetAngle)
+        {
+            currentAngle++;
+        }
+        else if (currentAngle > targetAngle)
+        {
+            currentAngle--;
+        }
 
-    if (currentAngle < targetAngle) {
-      currentAngle++;
-      servo.write(currentAngle);
-    } else if (currentAngle > targetAngle) {
-      currentAngle--;
-      servo.write(currentAngle);
+        servo.write(currentAngle);
     }
-  }
 
-  // Controls movement speed
-  delay(20);
+    // Controls movement speed
+    delay(20);
 }
-// end of code.
+
+/************************************************************
+ * THERAPY CYCLE MODE
+ *
+ * Automatically moves the servo:
+ *   minAngle -> maxAngle
+ *   maxAngle -> minAngle
+ *
+ * Parameters:
+ *   minAngle  = minimum exercise angle
+ *   maxAngle  = maximum exercise angle
+ *   speedDelay = delay between steps (ms)
+ *
+ * Smaller delay = faster movement
+ * Larger delay = slower movement
+ ************************************************************/
+void therapyCycle(
+    int minAngle,
+    int maxAngle,
+    int speedDelay)
+{
+  lcdPrint(minAngle, speedDelay);
+    // Flexion movement
+    for (int pos = minAngle;
+         pos <= maxAngle;
+         pos++)
+    {
+        servo.write(pos);
+        delay(speedDelay);
+    }
+
+    // Extension movement
+    for (int pos = maxAngle;
+         pos >= minAngle;
+         pos--)
+    {
+        servo.write(pos);
+        delay(speedDelay);
+    }
+}
+
+/************************************************************
+ * MAIN LOOP
+ *
+ * Select ONE control mode.
+ ************************************************************/
+void loop()
+{
+    // ---------------------------------
+    // MODE 1: Potentiometer Control
+    // ---------------------------------
+    // potentiometerControl();
+
+    // ---------------------------------
+    // MODE 2: Automatic Therapy Cycle
+    // Uncomment this and comment out
+    // potentiometerControl() above
+    // ---------------------------------
+
+    therapyCycle(
+        30,   // minimum angle
+        120,  // maximum angle
+        20    // speed (ms per step)
+    );
+}
+
+void lcdPrint(int angle, int target)
+{
+    // Clear-like behavior (depends on module firmware)
+    Serial.write(0xFE);  // command prefix (common serial LCD command)
+    Serial.write(0x01);  // clear display
+
+    Serial.print("Angle:");
+    Serial.print(angle);
+
+    Serial.write(0xFE);
+    Serial.write(0xC0);  // move to line 2
+
+    Serial.print("Target:");
+    Serial.print(target);
+}
