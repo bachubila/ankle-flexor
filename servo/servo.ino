@@ -50,7 +50,7 @@ void setup()
     // Initialize serial communication
     Serial.begin(9600);
 
-    Serial.println("Ankle Flexor Controller Started");
+    Serial.print("Ankle Flexor Controller Started");
 }
 
 /************************************************************
@@ -117,7 +117,7 @@ void therapyCycle(
     int maxAngle,
     int speedDelay)
 {
-  lcdPrint(minAngle, speedDelay);
+lcdPrintTherapy(minAngle, maxAngle, speedDelay);
     // Flexion movement
     for (int pos = minAngle;
          pos <= maxAngle;
@@ -156,24 +156,46 @@ void loop()
     // ---------------------------------
 
     therapyCycle(
-        30,   // minimum angle
+        80,   // minimum angle
         120,  // maximum angle
-        20    // speed (ms per step)
+        10    // speed (ms per step)
     );
 }
 
 void lcdPrint(int angle, int target)
 {
     // Clear-like behavior (depends on module firmware)
-    Serial.write(0xFE);  // command prefix (common serial LCD command)
-    Serial.write(0x01);  // clear display
+    // Serial.write(0xFE);  // command prefix (common serial LCD command)
+    // Serial.write(0x01);  // clear display
 
     Serial.print("Angle:");
     Serial.print(angle);
 
-    Serial.write(0xFE);
-    Serial.write(0xC0);  // move to line 2
+    // Serial.write(0xFE);
+    // Serial.write(0xC0);  // move to line 2
 
     Serial.print("Target:");
     Serial.print(target);
+}
+
+void lcdPrintTherapy(int minAngle, int maxAngle, int speed)
+{
+    // Clear-like behavior (depends on module firmware)
+    Serial.write(0xFE);  // command prefix (common serial LCD command)
+    Serial.write(0x01);  // clear display
+
+    Serial.print("Min:");
+    Serial.print(minAngle);
+
+    Serial.write(0xFE);
+    Serial.write(0xC0);  // move to line 2
+
+    Serial.print("Max:");
+    Serial.print(maxAngle);
+
+       Serial.write(0xFE);
+    Serial.write(0xC0);  // move to line 3
+
+    Serial.print("Speed:");
+    Serial.print(speed);
 }
