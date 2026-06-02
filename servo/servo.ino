@@ -1,201 +1,227 @@
 /************************************************************
  * Ankle Flexor Servo Controller
  *
- * Features:
- * 1. Potentiometer Control Mode
- *    - Potentiometer controls servo position.
- *    - Motion is limited to a safe angle range.
- *    - Servo movement is smoothed to reduce sudden jumps.
+ * Controls a servo motor for ankle rehabilitation therapy.
+ * Supports:
+ *   - Potentiometer Control Mode: manual position via pot
+ *   - Therapy Cycle Mode: automatic oscillation between
+ *     configurable min/max angles at configurable speed
  *
- * 2. Therapy Cycle Mode
- *    - Servo automatically moves between a minimum
- *      and maximum angle.
- *    - Movement speed is configurable.
+ * Pin Assignment:
+ *   Servo      -> D9
+ *   Potentiometer -> A0
+ *   LCD (16x2, 4-bit mode)
+ *     RS       -> D7
+ *     E        -> D8
+ *     D4       -> D10
+ *     D5       -> D11
+ *     D6       -> D12
+ *     D7       -> D13
  *
- * To switch modes:
- * - In loop(), call either:
- *     potentiometerControl();
- *   or
- *     therapyCycle(...);
- *
+ * Serial (9600 baud) is used at startup to configure
+ * therapy parameters. If nothing is sent within 5 seconds,
+ * default values are used.
  ************************************************************/
 
-#include <Servo.h>   // Arduino Servo library
+#include <Servo.h>
+#include <LiquidCrystal.h>
 
-// Create servo object
 Servo servo;
+LiquidCrystal lcd(7, 8, 10, 11, 12, 13);
 
-// Pin definitions
-#define PotPin    A0
-#define ServoPin  9
+#define PotPin   A0
+#define ServoPin 9
 
-// Safe operating range for potentiometer mode
 const int MIN_ANGLE = 30;
 const int MAX_ANGLE = 120;
+const int MIN_SPEED = 5;
+const int MAX_SPEED_MS = 200;
 
-// Track current servo position for smooth movement
-int currentAngle = 75;
+int therapyMin = 30;
+int therapyMax = 120;
+int therapySpeed = 20;
+
+int currentAngle = therapyMin;
 
 /************************************************************
  * SETUP
  ************************************************************/
 void setup()
 {
-    // Attach servo to control pin
     servo.attach(ServoPin);
-
-    // Move servo to starting position
     servo.write(currentAngle);
 
-    // Initialize serial communication
-    Serial.begin(9600);
+    lcd.begin(16, 2);
+    lcd.print("Ankle Flexor");
+    lcd.setCursor(0, 1);
+    lcd.print("Controller v2");
 
-    Serial.print("Ankle Flexor Controller Started");
+    Serial.begin(9600);
+    getTherapyParameters();
+
+    delay(1500);
+    lcd.clear();
 }
 
 /************************************************************
  * POTENTIOMETER CONTROL MODE
- *
- * Reads the potentiometer and maps its value to the
- * configured angle range.
- *
- * Smoothly moves the servo toward the target angle.
- * Includes a deadband to reduce jitter.
  ************************************************************/
 void potentiometerControl()
 {
-    // Read potentiometer value (0–1023)
     uint16_t potValue = analogRead(PotPin);
+    int targetAngle = map(potValue, 0, 1023, MIN_ANGLE, MAX_ANGLE);
 
-    // Convert potentiometer value into angle range
-    int targetAngle = map(
-        potValue,
-        0,
-        1023,
-        MIN_ANGLE,
-        MAX_ANGLE
-    );
-
-lcdPrint(currentAngle, targetAngle);
-    // Deadband: ignore tiny changes
     if (abs(targetAngle - currentAngle) > 1)
     {
-        // Move gradually toward target
-        if (currentAngle < targetAngle)
-        {
-            currentAngle++;
-        }
-        else if (currentAngle > targetAngle)
-        {
-            currentAngle--;
-        }
-
+        if (currentAngle < targetAngle) currentAngle++;
+        else if (currentAngle > targetAngle) currentAngle--;
         servo.write(currentAngle);
+        updateLcdPot(targetAngle);
     }
 
-    // Controls movement speed
-    delay(20);
+    delay(15);
 }
 
 /************************************************************
  * THERAPY CYCLE MODE
- *
- * Automatically moves the servo:
- *   minAngle -> maxAngle
- *   maxAngle -> minAngle
- *
- * Parameters:
- *   minAngle  = minimum exercise angle
- *   maxAngle  = maximum exercise angle
- *   speedDelay = delay between steps (ms)
- *
- * Smaller delay = faster movement
- * Larger delay = slower movement
  ************************************************************/
-void therapyCycle(
-    int minAngle,
-    int maxAngle,
-    int speedDelay)
+void therapyCycle()
 {
-lcdPrintTherapy(minAngle, maxAngle, speedDelay);
-    // Flexion movement
-    for (int pos = minAngle;
-         pos <= maxAngle;
-         pos++)
+    lcdPrintTherapy(therapyMin, therapyMax, therapySpeed);
+
+    for (int pos = therapyMin; pos <= therapyMax; pos++)
     {
         servo.write(pos);
-        delay(speedDelay);
+        currentAngle = pos;
+        updateLcdMotion(pos, "FLEX");
+        delay(therapySpeed);
     }
 
-    // Extension movement
-    for (int pos = maxAngle;
-         pos >= minAngle;
-         pos--)
+    for (int pos = therapyMax; pos >= therapyMin; pos--)
     {
         servo.write(pos);
-        delay(speedDelay);
+        currentAngle = pos;
+        updateLcdMotion(pos, "EXTEND");
+        delay(therapySpeed);
     }
 }
 
 /************************************************************
  * MAIN LOOP
  *
- * Select ONE control mode.
+ * Select one mode below.
  ************************************************************/
 void loop()
 {
-    // ---------------------------------
-    // MODE 1: Potentiometer Control
-    // ---------------------------------
+    therapyCycle();
     // potentiometerControl();
-
-    // ---------------------------------
-    // MODE 2: Automatic Therapy Cycle
-    // Uncomment this and comment out
-    // potentiometerControl() above
-    // ---------------------------------
-
-    therapyCycle(
-        80,   // minimum angle
-        120,  // maximum angle
-        10    // speed (ms per step)
-    );
 }
 
-void lcdPrint(int angle, int target)
+/************************************************************
+ * CONFIGURATION OVER SERIAL
+ *
+ * Prompts user for therapy parameters with a 5-second
+ * timeout. If no input is received, defaults are kept.
+ ************************************************************/
+void getTherapyParameters()
 {
-    // Clear-like behavior (depends on module firmware)
-    // Serial.write(0xFE);  // command prefix (common serial LCD command)
-    // Serial.write(0x01);  // clear display
+    unsigned long timeout = millis() + 5000;
 
-    Serial.print("Angle:");
-    Serial.print(angle);
+    Serial.println("Ankle Flexor Controller Started");
+    Serial.print("Enter MIN angle [");
+    Serial.print(MIN_ANGLE);
+    Serial.print("-");
+    Serial.print(MAX_ANGLE);
+    Serial.print("] (or wait 5s for default ");
+    Serial.print(therapyMin);
+    Serial.println("):");
 
-    // Serial.write(0xFE);
-    // Serial.write(0xC0);  // move to line 2
+    while (Serial.available() == 0)
+    {
+        if (millis() > timeout)
+        {
+            Serial.println("Timeout - using defaults");
+            printParameters();
+            return;
+        }
+    }
+    therapyMin = constrain(Serial.parseInt(), MIN_ANGLE, therapyMax);
 
-    Serial.print("Target:");
-    Serial.print(target);
+    Serial.print("Enter MAX angle [");
+    Serial.print(therapyMin);
+    Serial.print("-");
+    Serial.print(MAX_ANGLE);
+    Serial.print("] (default ");
+    Serial.print(therapyMax);
+    Serial.println("):");
+    while (Serial.available() == 0) {}
+    therapyMax = constrain(Serial.parseInt(), therapyMin, MAX_ANGLE);
+
+    Serial.print("Enter SPEED (ms per step) [");
+    Serial.print(MIN_SPEED);
+    Serial.print("-");
+    Serial.print(MAX_SPEED_MS);
+    Serial.print("] (default ");
+    Serial.print(therapySpeed);
+    Serial.println("):");
+    while (Serial.available() == 0) {}
+    therapySpeed = constrain(Serial.parseInt(), MIN_SPEED, MAX_SPEED_MS);
+
+    printParameters();
+}
+
+void printParameters()
+{
+    Serial.print("Parameters set - Min: ");
+    Serial.print(therapyMin);
+    Serial.print(" Max: ");
+    Serial.print(therapyMax);
+    Serial.print(" Speed: ");
+    Serial.print(therapySpeed);
+    Serial.println(" ms");
+}
+
+/************************************************************
+ * LCD HELPERS
+ ************************************************************/
+void updateLcdPot(int target)
+{
+    lcd.setCursor(0, 0);
+    lcd.print("Angle: ");
+    lcd.print(currentAngle);
+    lcd.print("   ");
+
+    lcd.setCursor(0, 1);
+    lcd.print("Target: ");
+    lcd.print(target);
+    lcd.print("   ");
+}
+
+void updateLcdMotion(int angle, const char* phase)
+{
+    lcd.setCursor(0, 0);
+    lcd.print("Pos: ");
+    lcd.print(angle);
+    lcd.print("   ");
+
+    lcd.setCursor(0, 1);
+    lcd.print(phase);
+    lcd.print("   ");
 }
 
 void lcdPrintTherapy(int minAngle, int maxAngle, int speed)
 {
-    // Clear-like behavior (depends on module firmware)
-    Serial.write(0xFE);  // command prefix (common serial LCD command)
-    Serial.write(0x01);  // clear display
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Min:");
+    lcd.print(minAngle);
+    lcd.print(" Max:");
+    lcd.print(maxAngle);
 
-    Serial.print("Min:");
-    Serial.print(minAngle);
+    lcd.setCursor(0, 1);
+    lcd.print("Speed:");
+    lcd.print(speed);
+    lcd.print("ms");
 
-    Serial.write(0xFE);
-    Serial.write(0xC0);  // move to line 2
-
-    Serial.print("Max:");
-    Serial.print(maxAngle);
-
-       Serial.write(0xFE);
-    Serial.write(0xC0);  // move to line 3
-
-    Serial.print("Speed:");
-    Serial.print(speed);
+    delay(1500);
 }
