@@ -18,6 +18,9 @@
  *     D6       -> D12
  *     D7       -> D13
  *
+ *   Button (A1 to GND) toggles therapy pause/resume.
+ *     Uses INPUT_PULLUP — no external resistor needed.
+ *
  * Serial (9600 baud) is used at startup to configure
  * therapy parameters. If nothing is sent within 5 seconds,
  * default values are used.
@@ -31,6 +34,7 @@ LiquidCrystal lcd(7, 8, 10, 11, 12, 13);
 
 #define PotPin   A0
 #define ServoPin 9
+#define BTN_START A1
 
 const int MIN_ANGLE = 30;
 const int MAX_ANGLE = 120;
@@ -42,6 +46,7 @@ int therapyMax = 120;
 int therapySpeed = 20;
 
 int currentAngle = therapyMin;
+bool therapyPaused = false;
 
 /************************************************************
  * SETUP
@@ -56,8 +61,10 @@ void setup()
     lcd.setCursor(0, 1);
     lcd.print("Controller v2");
 
+    pinMode(BTN_START, INPUT_PULLUP);
+
     Serial.begin(9600);
-    getTherapyParameters();
+    // getTherapyParameters();
 
     delay(1500);
     lcd.clear();
@@ -91,6 +98,8 @@ void therapyCycle()
 
     for (int pos = therapyMin; pos <= therapyMax; pos++)
     {
+        handleButton();
+        while (therapyPaused) pauseLoop();
         servo.write(pos);
         currentAngle = pos;
         updateLcdMotion(pos, "FLEX");
@@ -99,6 +108,8 @@ void therapyCycle()
 
     for (int pos = therapyMax; pos >= therapyMin; pos--)
     {
+        handleButton();
+        while (therapyPaused) pauseLoop();
         servo.write(pos);
         currentAngle = pos;
         updateLcdMotion(pos, "EXTEND");
@@ -179,6 +190,36 @@ void printParameters()
     Serial.print(" Speed: ");
     Serial.print(therapySpeed);
     Serial.println(" ms");
+}
+
+/************************************************************
+ * BUTTON HANDLING
+ ************************************************************/
+void handleButton()
+{
+    static bool lastState = HIGH;
+    static unsigned long lastDebounce = 0;
+
+    bool reading = digitalRead(BTN_START);
+
+    if (reading != lastState)
+        lastDebounce = millis();
+
+    if ((millis() - lastDebounce) > 50)
+    {
+        if (lastState == HIGH && reading == LOW)
+            therapyPaused = !therapyPaused;
+    }
+
+    lastState = reading;
+}
+
+void pauseLoop()
+{
+    lcd.setCursor(0, 0);
+    lcd.print("  ** PAUSED **  ");
+    handleButton();
+    delay(50);
 }
 
 /************************************************************

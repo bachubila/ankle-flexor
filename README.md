@@ -29,7 +29,7 @@ Arduino-based servo controller for ankle rehabilitation therapy, simulated in Pr
 ### 1. Clone or download the project
 
 ```
-git clone <repo-url> ankle_flexor
+git clone https://github.com/bachubila/ankle-flexor.git ankle_flexor
 cd ankle_flexor
 ```
 
