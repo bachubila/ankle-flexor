@@ -8,15 +8,15 @@
  *     configurable min/max angles at configurable speed
  *
  * Pin Assignment:
- *   Servo      -> D9
+ *   Servo      -> D6
  *   Potentiometer -> A0
  *   LCD (16x2, 4-bit mode)
- *     RS       -> D7
- *     E        -> D8
- *     D4       -> D10
- *     D5       -> D11
- *     D6       -> D12
- *     D7       -> D13
+ *     RS       -> D13
+ *     E        -> D12
+ *     D4       -> D11
+ *     D5       -> D10
+ *     D6       -> D9
+ *     D7       -> D8
  *
  *   Button (A1 to GND) toggles therapy pause/resume.
  *     Uses INPUT_PULLUP — no external resistor needed.
@@ -28,7 +28,7 @@
 
 #include <Servo.h>
 #include <LiquidCrystal.h>
-// initialize the library with the numbers of the interface pins
+
 LiquidCrystal lcd(13, 12, 11, 10, 9, 8);
 Servo servo;
 
@@ -45,8 +45,12 @@ int therapyMin = 30;
 int therapyMax = 120;
 int therapySpeed = 20;
 
+// Therapy cycle state
 int currentAngle = therapyMin;
 bool therapyPaused = false;
+int cyclePos = therapyMin;
+bool cycleForward = true;
+unsigned long lastStepTime = 0;
 
 /************************************************************
  * SETUP
@@ -55,7 +59,7 @@ void setup()
 {
     servo.attach(ServoPin);
     servo.write(currentAngle);
-  // set up the LCD's number of columns and rows:
+
     lcd.begin(16, 2);
     lcd.print("Ankle Flexor");
     lcd.setCursor(0, 1);
@@ -64,9 +68,9 @@ void setup()
     pinMode(BTN_START, INPUT_PULLUP);
 
     Serial.begin(9600);
-    // getTherapyParameters();
 
-    // delay(1500);
+    cyclePos = therapyMin;
+    lcdPrintTherapy(therapyMin, therapyMax, therapySpeed);
     lcd.clear();
 }
 
@@ -90,47 +94,58 @@ void potentiometerControl()
 }
 
 /************************************************************
- * THERAPY CYCLE MODE
- ************************************************************/
-void therapyCycle()
-{
-    lcdPrintTherapy(therapyMin, therapyMax, therapySpeed);
-
-    for (int pos = therapyMin; pos <= therapyMax; pos++)
-    {
-        handleButton();
-        while (therapyPaused) pauseLoop();
-        servo.write(pos);
-        currentAngle = pos;
-        updateLcdMotion(pos, "FLEX");
-        delay(therapySpeed);
-    }
-
-    for (int pos = therapyMax; pos >= therapyMin; pos--)
-    {
-        handleButton();
-        while (therapyPaused) pauseLoop();
-        servo.write(pos);
-        currentAngle = pos;
-        updateLcdMotion(pos, "EXTEND");
-        delay(therapySpeed);
-    }
-}
-
-/************************************************************
  * MAIN LOOP
  *
- * Select one mode below.
+ * Non-blocking therapy cycle using millis() timing.
+ * Button is checked every iteration for instant response.
  ************************************************************/
 void loop()
 {
-    // bool reading = digitalRead(BTN_START);
-    // if(reading == 0){
-    //     updateLcdMotion(0, "STOPPED BY USER!");
-    // }else{
-    therapyCycle();
-    // }
-    // potentiometerControl();
+    // therapyCycle();
+    potentiometerControl();
+
+    handleButton();
+
+    // Display pause state and skip stepping
+    if (therapyPaused)
+    {
+        lcd.setCursor(0, 0);
+        lcd.print("  ** PAUSED **  ");
+        return;
+    }
+
+    // Non-blocking step
+    if ((millis() - lastStepTime) >= (unsigned long)therapySpeed)
+    {
+        if (cycleForward)
+        {
+            cyclePos++;
+            if (cyclePos >= therapyMax)
+            {
+                cyclePos = therapyMax;
+                cycleForward = false;
+            }
+        }
+        else
+        {
+            cyclePos--;
+            if (cyclePos <= therapyMin)
+            {
+                cyclePos = therapyMin;
+                cycleForward = true;
+            }
+        }
+
+        servo.write(cyclePos);
+        currentAngle = cyclePos;
+
+        if (cycleForward)
+            updateLcdMotion(cyclePos, "FLEX");
+        else
+            updateLcdMotion(cyclePos, "EXTEND");
+
+        lastStepTime = millis();
+    }
 }
 
 /************************************************************
@@ -217,14 +232,6 @@ void handleButton()
     }
 
     lastState = reading;
-}
-
-void pauseLoop()
-{
-    lcd.setCursor(0, 0);
-    lcd.print("  ** PAUSED **  ");
-    handleButton();
-    delay(50);
 }
 
 /************************************************************
