@@ -28,12 +28,12 @@
 
 #include <Servo.h>
 #include <LiquidCrystal.h>
-
+// initialize the library with the numbers of the interface pins
+LiquidCrystal lcd(13, 12, 11, 10, 9, 8);
 Servo servo;
-LiquidCrystal lcd(7, 8, 10, 11, 12, 13);
 
 #define PotPin   A0
-#define ServoPin 9
+#define ServoPin 6
 #define BTN_START A1
 
 const int MIN_ANGLE = 30;
@@ -55,7 +55,7 @@ void setup()
 {
     servo.attach(ServoPin);
     servo.write(currentAngle);
-
+  // set up the LCD's number of columns and rows:
     lcd.begin(16, 2);
     lcd.print("Ankle Flexor");
     lcd.setCursor(0, 1);
@@ -66,7 +66,7 @@ void setup()
     Serial.begin(9600);
     // getTherapyParameters();
 
-    delay(1500);
+    // delay(1500);
     lcd.clear();
 }
 
@@ -124,7 +124,12 @@ void therapyCycle()
  ************************************************************/
 void loop()
 {
+    // bool reading = digitalRead(BTN_START);
+    // if(reading == 0){
+    //     updateLcdMotion(0, "STOPPED BY USER!");
+    // }else{
     therapyCycle();
+    // }
     // potentiometerControl();
 }
 
