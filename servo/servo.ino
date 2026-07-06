@@ -2,279 +2,340 @@
  * Ankle Flexor Servo Controller
  *
  * Controls a servo motor for ankle rehabilitation therapy.
- * Supports:
- *   - Potentiometer Control Mode: manual position via pot
- *   - Therapy Cycle Mode: automatic oscillation between
- *     configurable min/max angles at configurable speed
  *
- * Pin Assignment:
- *   Servo      -> D6
- *   Potentiometer -> A0
- *   LCD (16x2, 4-bit mode)
- *     RS       -> D13
- *     E        -> D12
- *     D4       -> D11
- *     D5       -> D10
- *     D6       -> D9
- *     D7       -> D8
+ * Modes:
+ *   - Therapy Cycle (default)
+ *   - Potentiometer Control (optional)
  *
- *   Button (A1 to GND) toggles therapy pause/resume.
- *     Uses INPUT_PULLUP — no external resistor needed.
- *
- * Serial (9600 baud) is used at startup to configure
- * therapy parameters. If nothing is sent within 5 seconds,
- * default values are used.
+ * LCD shows:
+ *   Dorsi-flexing
+ *   Plantar-flexing
+ *   Idle
  ************************************************************/
 
 #include <Servo.h>
-#include <LiquidCrystal.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 
-LiquidCrystal lcd(13, 12, 11, 10, 9, 8);
+// LCD (I2C address 0x27, 20 cols, 4 rows)
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+// Servo
 Servo servo;
 
-#define PotPin   A0
+// Pin Definitions
+#define PotPin A0
 #define ServoPin 6
+#define LED_PIN 2
+#define BUZZER_PIN 3
 #define BTN_START A1
 
-const int MIN_ANGLE = 30;
-const int MAX_ANGLE = 120;
+// MG995 Servo Configuration
+const int SERVO_CENTER = 90;
+const int SERVO_RANGE  = 60;
+
+const int MIN_ANGLE = SERVO_CENTER - SERVO_RANGE;   //30°
+const int MAX_ANGLE = SERVO_CENTER + SERVO_RANGE;   //150°
+
 const int MIN_SPEED = 5;
 const int MAX_SPEED_MS = 200;
 
-int therapyMin = 30;
-int therapyMax = 120;
+// Default therapy settings
+int therapyMin = 50;
+int therapyMax = 130;
 int therapySpeed = 20;
 
-// Therapy cycle state
-int currentAngle = therapyMin;
+int currentAngle = SERVO_CENTER;
+
 bool therapyPaused = false;
-int cyclePos = therapyMin;
-bool cycleForward = true;
-unsigned long lastStepTime = 0;
+int btnState = HIGH;
+
+bool alertActive = false;
+unsigned long alertStartTime = 0;
+
+int lastPotValue = 0;
+const int POT_THRESHOLD = 10;  // Minimum ADC change to count as movement
 
 /************************************************************
  * SETUP
  ************************************************************/
-void setup()
-{
-    servo.attach(ServoPin);
+void setup() {
+  currentAngle = SERVO_CENTER;
+
+  servo.attach(ServoPin);
+  servo.write(currentAngle);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.print("Ankle Therapy");
+  lcd.setCursor(0, 1);
+  lcd.print("Initializing");
+
+  pinMode(BTN_START, INPUT_PULLUP);
+
+  Serial.begin(9600);
+
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  lastPotValue = analogRead(PotPin);
+
+  getTherapyParameters();
+
+  delay(1500);
+  lcd.clear();
+}
+
+/************************************************************
+ * POTENTIOMETER MODE
+ ************************************************************/
+void potentiometerControl() {
+  uint16_t potValue = analogRead(PotPin);
+
+  int targetAngle = map(
+    potValue,
+    0,
+    1023,
+    MIN_ANGLE,
+    MAX_ANGLE);
+
+  if (abs(targetAngle - currentAngle) > 1) {
+    if (currentAngle < targetAngle)
+      currentAngle++;
+    else
+      currentAngle--;
+
     servo.write(currentAngle);
+  }
 
-    lcd.begin(16, 2);
-    lcd.print("Ankle Flexor");
-    lcd.setCursor(0, 1);
-    lcd.print("Controller v2");
+  lcd.setCursor(0, 0);
+  lcd.print("Manual Control ");
 
-    pinMode(BTN_START, INPUT_PULLUP);
+  lcd.setCursor(0, 1);
+  lcd.print("Positioning    ");
 
-    Serial.begin(9600);
-
-    cyclePos = therapyMin;
-    lcdPrintTherapy(therapyMin, therapyMax, therapySpeed);
-    lcd.clear();
+  delay(15);
 }
 
 /************************************************************
- * POTENTIOMETER CONTROL MODE
+ * THERAPY MODE
  ************************************************************/
-void potentiometerControl()
-{
-    uint16_t potValue = analogRead(PotPin);
-    int targetAngle = map(potValue, 0, 1023, MIN_ANGLE, MAX_ANGLE);
+void moveAndWait(int pos, const char* phase) {
+  servo.write(pos);
+  currentAngle = pos;
+  updateLcdMotion(phase);
 
-    if (abs(targetAngle - currentAngle) > 1)
-    {
-        if (currentAngle < targetAngle) currentAngle++;
-        else if (currentAngle > targetAngle) currentAngle--;
-        servo.write(currentAngle);
-        updateLcdPot(targetAngle);
-    }
-
-    delay(15);
-}
-
-/************************************************************
- * MAIN LOOP
- *
- * Non-blocking therapy cycle using millis() timing.
- * Button is checked every iteration for instant response.
- ************************************************************/
-void loop()
-{
-    // therapyCycle();
-    potentiometerControl();
-
+  unsigned long t0 = millis();
+  while (millis() - t0 < (unsigned long)therapySpeed) {
     handleButton();
+    checkPotMovement();
+    updateAlert();
+    while (therapyPaused)
+      pauseLoop();
+    delay(5);
+  }
+}
 
-    // Display pause state and skip stepping
-    if (therapyPaused)
-    {
-        lcd.setCursor(0, 0);
-        lcd.print("  ** PAUSED **  ");
-        return;
-    }
+void therapyCycle() {
+  lcdPrintTherapy();
+  lcdPrintTherapyInfo();
 
-    // Non-blocking step
-    if ((millis() - lastStepTime) >= (unsigned long)therapySpeed)
-    {
-        if (cycleForward)
-        {
-            cyclePos++;
-            if (cyclePos >= therapyMax)
-            {
-                cyclePos = therapyMax;
-                cycleForward = false;
-            }
-        }
-        else
-        {
-            cyclePos--;
-            if (cyclePos <= therapyMin)
-            {
-                cyclePos = therapyMin;
-                cycleForward = true;
-            }
-        }
+  for (int pos = therapyMin; pos <= therapyMax; pos++)
+    moveAndWait(pos, "DORSI");
 
-        servo.write(cyclePos);
-        currentAngle = cyclePos;
-
-        if (cycleForward)
-            updateLcdMotion(cyclePos, "FLEX");
-        else
-            updateLcdMotion(cyclePos, "EXTEND");
-
-        lastStepTime = millis();
-    }
+  for (int pos = therapyMax; pos >= therapyMin; pos--)
+    moveAndWait(pos, "PLANTAR");
 }
 
 /************************************************************
- * CONFIGURATION OVER SERIAL
- *
- * Prompts user for therapy parameters with a 5-second
- * timeout. If no input is received, defaults are kept.
+ * LOOP
  ************************************************************/
-void getTherapyParameters()
-{
-    unsigned long timeout = millis() + 5000;
+void loop() {
+  therapyCycle();
 
-    Serial.println("Ankle Flexor Controller Started");
-    Serial.print("Enter MIN angle [");
-    Serial.print(MIN_ANGLE);
-    Serial.print("-");
-    Serial.print(MAX_ANGLE);
-    Serial.print("] (or wait 5s for default ");
-    Serial.print(therapyMin);
-    Serial.println("):");
-
-    while (Serial.available() == 0)
-    {
-        if (millis() > timeout)
-        {
-            Serial.println("Timeout - using defaults");
-            printParameters();
-            return;
-        }
-    }
-    therapyMin = constrain(Serial.parseInt(), MIN_ANGLE, therapyMax);
-
-    Serial.print("Enter MAX angle [");
-    Serial.print(therapyMin);
-    Serial.print("-");
-    Serial.print(MAX_ANGLE);
-    Serial.print("] (default ");
-    Serial.print(therapyMax);
-    Serial.println("):");
-    while (Serial.available() == 0) {}
-    therapyMax = constrain(Serial.parseInt(), therapyMin, MAX_ANGLE);
-
-    Serial.print("Enter SPEED (ms per step) [");
-    Serial.print(MIN_SPEED);
-    Serial.print("-");
-    Serial.print(MAX_SPEED_MS);
-    Serial.print("] (default ");
-    Serial.print(therapySpeed);
-    Serial.println("):");
-    while (Serial.available() == 0) {}
-    therapySpeed = constrain(Serial.parseInt(), MIN_SPEED, MAX_SPEED_MS);
-
-    printParameters();
+  // Uncomment for manual potentiometer mode
+  // potentiometerControl();
 }
 
-void printParameters()
-{
-    Serial.print("Parameters set - Min: ");
-    Serial.print(therapyMin);
-    Serial.print(" Max: ");
-    Serial.print(therapyMax);
-    Serial.print(" Speed: ");
-    Serial.print(therapySpeed);
-    Serial.println(" ms");
+/************************************************************
+ * SERIAL CONFIGURATION
+ ************************************************************/
+// Reads a line from Serial with timeout (ms). Returns empty string on timeout.
+String readSerialLine(unsigned long timeoutMs) {
+  unsigned long start = millis();
+  String line = "";
+  while (millis() - start < timeoutMs) {
+    if (Serial.available()) {
+      char c = Serial.read();
+      if (c == '\n') {
+        if (line.length() > 0)
+          break;
+      } else if (c != '\r') {
+        line += c;
+      }
+    }
+  }
+  return line;
+}
+
+void getTherapyParameters() {
+  Serial.println("Ankle Therapy Controller");
+  delay(100);
+  while (Serial.available()) Serial.read();  // flush stale data
+
+  // --- MIN ---
+  Serial.print("Enter MIN angle (");
+  Serial.print(MIN_ANGLE);
+  Serial.print("-");
+  Serial.print(MAX_ANGLE);
+  Serial.print(") Default=");
+  Serial.println(therapyMin);
+
+  String input = readSerialLine(5000);
+  if (input.length() > 0)
+    therapyMin = constrain(input.toInt(), MIN_ANGLE, therapyMax);
+
+  // --- MAX ---
+  Serial.print("Enter MAX angle (");
+  Serial.print(therapyMin);
+  Serial.print("-");
+  Serial.print(MAX_ANGLE);
+  Serial.print(") Default=");
+  Serial.println(therapyMax);
+
+  input = readSerialLine(5000);
+  if (input.length() > 0)
+    therapyMax = constrain(input.toInt(), therapyMin, MAX_ANGLE);
+
+  // --- SPEED ---
+  Serial.print("Enter Speed (");
+  Serial.print(MIN_SPEED);
+  Serial.print("-");
+  Serial.print(MAX_SPEED_MS);
+  Serial.print(" ms) Default=");
+  Serial.println(therapySpeed);
+
+  input = readSerialLine(5000);
+  if (input.length() > 0)
+    therapySpeed = constrain(input.toInt(), MIN_SPEED, MAX_SPEED_MS);
+
+  printParameters();
+}
+
+void printParameters() {
+  Serial.println();
+
+  Serial.print("Therapy Minimum : ");
+  Serial.println(therapyMin);
+
+  Serial.print("Therapy Maximum : ");
+  Serial.println(therapyMax);
+
+  Serial.print("Therapy Speed   : ");
+  Serial.print(therapySpeed);
+  Serial.println(" ms");
+
+  Serial.println();
 }
 
 /************************************************************
  * BUTTON HANDLING
  ************************************************************/
-void handleButton()
-{
-    static bool lastState = HIGH;
-    static unsigned long lastDebounce = 0;
+void handleButton() {
+  int reading = digitalRead(BTN_START);
 
-    bool reading = digitalRead(BTN_START);
+  if (reading == LOW && btnState == HIGH) {
+    therapyPaused = !therapyPaused;
+    Serial.print("Therapy ");
+    Serial.println(therapyPaused ? "PAUSED" : "RESUMED");
+  }
 
-    if (reading != lastState)
-        lastDebounce = millis();
+  btnState = reading;
+}
 
-    if ((millis() - lastDebounce) > 50)
-    {
-        if (lastState == HIGH && reading == LOW)
-            therapyPaused = !therapyPaused;
-    }
+void pauseLoop() {
+  servo.write(currentAngle);
+  checkPotMovement();
+  updateAlert();
+  lcd.setCursor(0, 0);
+  lcd.print("* THERAPY STOP *");
 
-    lastState = reading;
+  lcd.setCursor(0, 1);
+  lcd.print("by therapist   ");
+
+  handleButton();
+
+  delay(10);
 }
 
 /************************************************************
- * LCD HELPERS
+ * LCD FUNCTIONS
  ************************************************************/
-void updateLcdPot(int target)
-{
-    lcd.setCursor(0, 0);
-    lcd.print("Angle: ");
-    lcd.print(currentAngle);
-    lcd.print("   ");
+void updateLcdMotion(const char* phase) {
+  lcd.setCursor(0, 0);
+  lcd.print("Ankle Therapy  ");
 
-    lcd.setCursor(0, 1);
-    lcd.print("Target: ");
-    lcd.print(target);
-    lcd.print("   ");
+  lcd.setCursor(0, 1);
+
+  if (strcmp(phase, "DORSI") == 0) {
+    lcd.print("Dorsi-flexing ");
+  } else if (strcmp(phase, "PLANTAR") == 0) {
+    lcd.print("Plantar-flex  ");
+  } else {
+    lcd.print("Idle          ");
+  }
 }
 
-void updateLcdMotion(int angle, const char* phase)
-{
-    lcd.setCursor(0, 0);
-    lcd.print("Pos: ");
-    lcd.print(angle);
-    lcd.print("   ");
+void lcdPrintTherapy() {
+  lcd.clear();
 
-    lcd.setCursor(0, 1);
-    lcd.print(phase);
-    lcd.print("   ");
+  lcd.setCursor(0, 0);
+  lcd.print("Ankle Therapy   ");
+  lcd.setCursor(0, 1);
+  lcd.print("Starting...     ");
+
+  for (int i = 0; i < 150; i++) {
+    updateAlert();
+    delay(10);
+  }
 }
 
-void lcdPrintTherapy(int minAngle, int maxAngle, int speed)
-{
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Min:");
-    lcd.print(minAngle);
-    lcd.print(" Max:");
-    lcd.print(maxAngle);
+void lcdPrintTherapyInfo() {
+  lcd.setCursor(0, 2);
+  lcd.print("Speed - ");
+  lcd.print(therapySpeed);
+  lcd.print(" ms         ");
 
-    lcd.setCursor(0, 1);
-    lcd.print("Speed:");
-    lcd.print(speed);
-    lcd.print("ms");
+  lcd.setCursor(0, 3);
+  lcd.print("min-");
+  lcd.print(therapyMin);
+  lcd.print(" max-");
+  lcd.print(therapyMax);
+  lcd.print("       ");
+}
 
-    delay(1500);
+void checkPotMovement() {
+  int potValue = analogRead(PotPin);
+
+  if (!alertActive && abs(potValue - lastPotValue) > POT_THRESHOLD) {
+    alertActive = true;
+    alertStartTime = millis();
+
+    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(BUZZER_PIN, HIGH);
+  }
+
+  lastPotValue = potValue;
+}
+
+void updateAlert() {
+  if (alertActive && millis() - alertStartTime >= 1000) {
+    alertActive = false;
+
+    digitalWrite(LED_PIN, LOW);
+    digitalWrite(BUZZER_PIN, LOW);
+  }
 }
